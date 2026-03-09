@@ -5,17 +5,16 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 import OpenAI from "openai";
-import Stripe from "stripe";
+import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
+import { db } from "./db";
+import { sql } from "drizzle-orm";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2025-03-31.basil" })
-  : null;
-
+// Monthly price ID (£1.99) — populated after creating via seed script or Stripe dashboard
 const MONTHLY_PRICE_ID = process.env.STRIPE_PRICE_ID || "";
 
 export async function registerRoutes(
@@ -42,58 +41,89 @@ export async function registerRoutes(
     res.json({ ...sub, hasAccess: access });
   });
 
+  // ── Stripe publishable key (for frontend) ─────────────────────────────────
+  app.get("/api/stripe/publishable-key", async (req, res) => {
+    try {
+      const key = await getStripePublishableKey();
+      res.json({ publishableKey: key });
+    } catch {
+      res.status(503).json({ message: "Stripe not configured" });
+    }
+  });
+
   // ── Stripe checkout ───────────────────────────────────────────────────────
   app.post("/api/subscription/checkout", isAuthenticated, async (req: any, res) => {
-    if (!stripe) return res.status(503).json({ message: "Payments not configured yet" });
     const userId = req.user.claims.sub;
     const origin = `${req.protocol}://${req.hostname}`;
     try {
+      const stripe = await getUncachableStripeClient();
+
+      // Find or create Stripe customer
+      let sub = await storage.getSubscription(userId);
+      let customerId = sub?.stripeCustomerId;
+
+      if (!customerId) {
+        const customer = await stripe.customers.create({ metadata: { userId } });
+        customerId = customer.id;
+      }
+
+      // Look up the price for £1.99/month from the stripe schema if STRIPE_PRICE_ID not set
+      let priceId = MONTHLY_PRICE_ID;
+      if (!priceId) {
+        const prices = await db.execute(
+          sql`SELECT id FROM stripe.prices WHERE currency = 'gbp' AND unit_amount = 199 AND active = true LIMIT 1`
+        );
+        priceId = (prices.rows[0] as any)?.id || "";
+      }
+
+      if (!priceId) {
+        return res.status(503).json({ message: "Subscription product not configured. Please create a £1.99/month price in Stripe." });
+      }
+
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
-        currency: "gbp",
-        line_items: [{ price: MONTHLY_PRICE_ID, quantity: 1 }],
+        customer: customerId,
+        line_items: [{ price: priceId, quantity: 1 }],
         success_url: `${origin}/check-in?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${origin}/check-in`,
         metadata: { userId },
       });
+
       res.json({ url: session.url });
     } catch (e: any) {
+      console.error("Checkout error:", e.message);
       res.status(500).json({ message: e.message });
     }
   });
 
-  // ── Stripe webhook ────────────────────────────────────────────────────────
-  app.post("/api/webhook/stripe", async (req, res) => {
-    if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.sendStatus(400);
-    let event: Stripe.Event;
+  // ── Subscription webhook handled in index.ts /api/stripe/webhook ──────────
+  // When checkout.session.completed fires, stripe-replit-sync syncs the subscription
+  // We also need to update our own subscriptions table via polling or a custom hook.
+  // Listen for subscription status checks against the stripe schema:
+  app.post("/api/subscription/verify-session", isAuthenticated, async (req: any, res) => {
+    const { sessionId } = req.body;
+    const userId = req.user.claims.sub;
     try {
-      event = stripe.webhooks.constructEvent(
-        req.body, req.headers["stripe-signature"] as string, process.env.STRIPE_WEBHOOK_SECRET
-      );
-    } catch {
-      return res.sendStatus(400);
-    }
-    const session = event.data.object as any;
-    if (event.type === "checkout.session.completed") {
-      const userId = session.metadata?.userId;
-      if (userId) {
-        const subscription = await stripe.subscriptions.retrieve(session.subscription);
+      const stripe = await getUncachableStripeClient();
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      if (session.status === "complete" && session.metadata?.userId === userId) {
+        const stripeSubId = session.subscription as string;
+        const stripeSub = await stripe.subscriptions.retrieve(stripeSubId);
         await storage.createOrUpdateSubscription({
           userId,
-          stripeCustomerId: session.customer,
-          stripeSubscriptionId: session.subscription,
+          stripeCustomerId: session.customer as string,
+          stripeSubscriptionId: stripeSubId,
           status: "active",
-          currentPeriodEnd: new Date((subscription as any).current_period_end * 1000),
+          currentPeriodEnd: new Date((stripeSub as any).current_period_end * 1000),
         });
       }
+      const sub = await storage.getSubscription(userId);
+      const now = new Date();
+      const hasAccess = sub?.status === "active" && sub?.currentPeriodEnd && sub.currentPeriodEnd > now;
+      res.json({ ...sub, hasAccess: !!hasAccess });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message });
     }
-    if (event.type === "customer.subscription.deleted") {
-      const userId = session.metadata?.userId;
-      if (userId) {
-        await storage.createOrUpdateSubscription({ userId, status: "expired" });
-      }
-    }
-    res.sendStatus(200);
   });
 
   // ── AI Chat ───────────────────────────────────────────────────────────────

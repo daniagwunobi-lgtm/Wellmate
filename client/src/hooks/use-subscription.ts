@@ -1,5 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useEffect } from "react";
+import { useLocation } from "wouter";
 
 export interface SubscriptionStatus {
   id: number;
@@ -28,6 +30,19 @@ export function useStartCheckout() {
     },
     onSuccess: ({ url }) => {
       window.location.href = url;
+    },
+  });
+}
+
+export function useVerifySession() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (sessionId: string) => {
+      const res = await apiRequest("POST", "/api/subscription/verify-session", { sessionId });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/subscription"] });
     },
   });
 }
