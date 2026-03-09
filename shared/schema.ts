@@ -1,18 +1,97 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
+export * from "./models/auth";
+export * from "./models/chat";
+
+import { pgTable, text, serial, integer, timestamp, varchar } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import { users } from "./models/auth";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+export const moodLogs = pgTable("mood_logs", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  moodScore: integer("mood_score").notNull(),
+  stressLevel: integer("stress_level").notNull(),
+  energyLevel: integer("energy_level").notNull(),
+  motivationLevel: integer("motivation_level").notNull(),
+  productivityLevel: integer("productivity_level").notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export const journalEntries = pgTable("journal_entries", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+export const habits = pgTable("habits", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const habitLogs = pgTable("habit_logs", {
+  id: serial("id").primaryKey(),
+  habitId: integer("habit_id").notNull().references(() => habits.id),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  completedAt: timestamp("completed_at").defaultNow().notNull(),
+});
+
+export const financialLogs = pgTable("financial_logs", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  rent: integer("rent").notNull(),
+  food: integer("food").notNull(),
+  utilities: integer("utilities").notNull(),
+  transport: integer("transport").notNull(),
+  income: integer("income").notNull(),
+  savings: integer("savings").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const userSkills = pgTable("user_skills", {
+  id: serial("id").primaryKey(),
+  userId: varchar("user_id").notNull().references(() => users.id),
+  skill: text("skill").notNull(),
+});
+
+export const quotes = pgTable("quotes", {
+  id: serial("id").primaryKey(),
+  content: text("content").notNull(),
+  theme: text("theme").notNull(),
+  imageUrl: text("image_url"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Zod schemas
+export const insertMoodLogSchema = createInsertSchema(moodLogs).omit({ id: true, createdAt: true });
+export const insertJournalEntrySchema = createInsertSchema(journalEntries).omit({ id: true, createdAt: true });
+export const insertHabitSchema = createInsertSchema(habits).omit({ id: true, createdAt: true });
+export const insertHabitLogSchema = createInsertSchema(habitLogs).omit({ id: true, completedAt: true });
+export const insertFinancialLogSchema = createInsertSchema(financialLogs).omit({ id: true, createdAt: true });
+export const insertUserSkillSchema = createInsertSchema(userSkills).omit({ id: true });
+export const insertQuoteSchema = createInsertSchema(quotes).omit({ id: true, createdAt: true });
+
+// Types
+export type MoodLog = typeof moodLogs.$inferSelect;
+export type InsertMoodLog = z.infer<typeof insertMoodLogSchema>;
+
+export type JournalEntry = typeof journalEntries.$inferSelect;
+export type InsertJournalEntry = z.infer<typeof insertJournalEntrySchema>;
+
+export type Habit = typeof habits.$inferSelect;
+export type InsertHabit = z.infer<typeof insertHabitSchema>;
+
+export type HabitLog = typeof habitLogs.$inferSelect;
+export type InsertHabitLog = z.infer<typeof insertHabitLogSchema>;
+
+export type FinancialLog = typeof financialLogs.$inferSelect;
+export type InsertFinancialLog = z.infer<typeof insertFinancialLogSchema>;
+
+export type UserSkill = typeof userSkills.$inferSelect;
+export type InsertUserSkill = z.infer<typeof insertUserSkillSchema>;
+
+export type Quote = typeof quotes.$inferSelect;
+export type InsertQuote = z.infer<typeof insertQuoteSchema>;
