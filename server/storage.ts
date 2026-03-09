@@ -7,10 +7,12 @@ import {
   financialLogs,
   userSkills,
   quotes,
+  subscriptions,
   type InsertMoodLog,
   type InsertJournalEntry,
   type InsertHabit,
   type InsertFinancialLog,
+  type Subscription,
 } from "@shared/schema";
 import { eq, and, gte } from "drizzle-orm";
 
@@ -35,6 +37,9 @@ export interface IStorage {
   // Quotes
   getDailyQuotes(): Promise<(typeof quotes.$inferSelect)[]>;
   createQuote(quote: Omit<typeof quotes.$inferSelect, "id" | "createdAt">): Promise<typeof quotes.$inferSelect>;
+  // Subscriptions
+  getSubscription(userId: string): Promise<Subscription | undefined>;
+  createOrUpdateSubscription(data: Partial<Subscription> & { userId: string }): Promise<Subscription>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -94,6 +99,26 @@ export class DatabaseStorage implements IStorage {
   }
   async createQuote(quote: Omit<typeof quotes.$inferSelect, "id" | "createdAt">) {
     const [res] = await db.insert(quotes).values(quote).returning();
+    return res;
+  }
+  async getSubscription(userId: string) {
+    const [sub] = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId));
+    return sub;
+  }
+  async createOrUpdateSubscription(data: Partial<Subscription> & { userId: string }) {
+    const existing = await this.getSubscription(data.userId);
+    if (existing) {
+      const [res] = await db.update(subscriptions).set(data).where(eq(subscriptions.userId, data.userId)).returning();
+      return res;
+    }
+    const [res] = await db.insert(subscriptions).values({
+      userId: data.userId,
+      status: data.status ?? "trial",
+      trialEndsAt: data.trialEndsAt ?? new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+      stripeCustomerId: data.stripeCustomerId,
+      stripeSubscriptionId: data.stripeSubscriptionId,
+      currentPeriodEnd: data.currentPeriodEnd,
+    }).returning();
     return res;
   }
 }
