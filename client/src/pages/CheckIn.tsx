@@ -3,12 +3,28 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { useCreateCheckIn } from "@/hooks/use-wellbeing";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { SubscriptionGate } from "@/components/SubscriptionGate";
+import { useVerifySession } from "@/hooks/use-subscription";
 
 export default function CheckIn() {
+  const verifySession = useVerifySession();
+  const { toast } = useToast();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get("session_id");
+    if (sessionId) {
+      verifySession.mutate(sessionId, {
+        onSuccess: () => {
+          toast({ title: "Subscription activated!", description: "You now have full access to Daily Check-In." });
+          window.history.replaceState({}, "", "/check-in");
+        },
+      });
+    }
+  }, []);
   const [mood, setMood] = useState([5]);
   const [stress, setStress] = useState([5]);
   const [energy, setEnergy] = useState([5]);
@@ -17,7 +33,6 @@ export default function CheckIn() {
   const [notes, setNotes] = useState("");
   const [journal, setJournal] = useState("");
 
-  const { toast } = useToast();
   const createCheckIn = useCreateCheckIn();
 
   const handleSubmit = () => {
